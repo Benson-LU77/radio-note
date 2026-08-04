@@ -5,6 +5,9 @@
  * Pushing to Obsidian is a separate, slower concern (see notes.tsx).
  */
 
+// "yeyufm" is the app's original storage namespace. It stays for
+// compatibility — renaming it would orphan every user's drafts,
+// purchases and settings. It's an internal key, never shown anywhere.
 const DB_NAME = "yeyufm";
 const DB_VERSION = 2;
 const LEGACY_DRAFT_KEY = "yeyufm.draft";

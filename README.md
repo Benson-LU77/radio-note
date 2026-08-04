@@ -1,44 +1,66 @@
-# 夜雨 FM · Radio Note
+# Tata
 
-A late-night ambient radio you can write in.
+**Signal becomes structure.** A city built from your notes.
 
-Turn the knob, tune across five living scenes — rain on a night bus window, a warm room, a wind-swept forest, a campfire, a moonlit coast — and jot notes straight into your Obsidian vault while the rain keeps falling.
+Every page you write in [Obsidian](https://obsidian.md) becomes a building.
+The calendar is the map — one month is a block, weekdays run across it,
+weeks run down it. Skipped days stay empty lots. The archive grows into a
+pixel skyline drifting in deep space, with residents, cats, a dog, and one
+amber figure walking the newest streets: you.
 
-## Features
+**Local-first, free, forever.** Your notes never leave your machine and are
+never deleted — Tata only reads your vault and writes with a conflict guard.
 
-- **Radio-style interaction** — power on with a knob, switch scenes by tuning (drag the dial, swipe the scene, scroll, or use ←/→). Static noise and defocus between stations.
-- **Five procedural scenes** — every visual is CSS/SVG drawn from scratch. No images, no copyright worries.
-- **Natural generative audio** — Web Audio synthesis with slow LFO swells and randomized one-shot events: raindrop plips, distant birdsong, fire crackles, wave washes. No loops, no samples.
-- **Obsidian notes** — connects to the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin. Browse, edit (autosave) and create notes; each new note is stamped with the time and the channel you were listening to.
-- **Sleep timer, mixer, fullscreen** — master / main / ambience / bass sliders, 30/60-minute auto-stop.
+→ **[benson-lu77.github.io/tata](https://benson-lu77.github.io/tata/)**
 
-## Channels
+## How it plays
 
-| Freq | Channel | Sound |
-|------|---------|-------|
-| 88.7 | LAST TRAIN | rain on glass, cabin hum |
-| 92.1 | STAY HOME | soft rain, warm room tone |
-| 95.3 | DEEP FOREST | wind, leaves, distant birds |
-| 98.4 | CAMPFIRE | crackling fire, warm night |
-| 101.6 | MOONLIT COAST | slow swells, light drizzle |
+- **Write** — press `N` (or *Today*). Tonight's building grows storey by
+  storey as you type, lit with the only warm colour in the city.
+- **Earn watts** — every night you write earns watts; word counts are
+  log-compressed and capped, so writing nights beat word floods.
+- **The Depot** (`B`) — spend watts on cats, birds, a dog, street lamps,
+  groves, a fountain, district skins, and weather (rain, snow, sea fog).
+  Everything is earned. Amber is not for sale.
+- **The Registry** (`C`) — the city remembers how each page was written:
+  a lighthouse for returning after seven days away, an arch for a page
+  written to a past empty day, a chapel for the smallest hours.
+- **Levels** — watts raise the skyline height limit; levelling up lets the
+  whole city grow at once. Consecutive nights light streetlights that are
+  never taken away.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| drag | orbit (snaps to 45°) · `Q`/`E` rotate |
+| wheel / pinch | zoom · horizontal scroll pans |
+| arrows / `Shift`+drag | pan |
+| `[` `]` | travel between months |
+| click a building | open that note |
+| `/` | search (lights up matching buildings) |
+| `Z` | zen — chrome fades, just the city |
 
 ## Run it
 
 ```bash
 npm install
 npm run dev        # http://localhost:8080
+npm run test:city  # determinism tests for the pure city layer
 ```
 
-### Obsidian setup (optional, for notes)
+Connect Obsidian via the
+[Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api)
+plugin — paste its key into the panel behind the ⚙ icon. Without it, Tata
+still works: notes stay in the browser until you connect.
 
-1. Install the **Local REST API** community plugin in Obsidian
-2. Enable its **Non-encrypted (HTTP) Server** (port 27123)
-3. In the app press `N`, paste the API key, connect
+## Principles
 
-## Keys
+- The city is a portrait of your vault, not a score. No streaks that
+  punish, no numbers on the main screen, nothing ever decays.
+- Same vault, same city — layout is a pure function of your notes.
+- Amber belongs to today's page alone.
 
-`Enter` power on · `←/→` tune · `Space` play/pause · `N` notes · `Esc` close panels
-
----
-
-Built with Next.js (vinext) + React. All scenes and sounds are generated in the browser.
+Built with React 19, Three.js, CodeMirror 6. Pixel pipeline: the whole
+scene renders at ~270p and integer-scales up through an 8-step palette
+with Bayer dithering.
