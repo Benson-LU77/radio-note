@@ -1,0 +1,396 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import { EditorState, StateField, RangeSetBuilder } from "@codemirror/state";
+import {
+  EditorView,
+  keymap,
+  placeholder as cmPlaceholder,
+  Decoration,
+  WidgetType,
+  drawSelection,
+} from "@codemirror/view";
+import type { DecorationSet } from "@codemirror/view";
+import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { syntaxHighlighting, HighlightStyle, syntaxTree } from "@codemirror/language";
+import { autocompletion } from "@codemirror/autocomplete";
+import type { CompletionContext, Completion } from "@codemirror/autocomplete";
+import { markdown, markdownLanguage, markdownKeymap } from "@codemirror/lang-markdown";
+import { tags } from "@lezer/highlight";
+
+export type EditorApi = {
+  toggle: (kind: "list" | "todo" | "heading") => void;
+  focus: () => void;
+  cursorToEnd: () => void;
+};
+
+/* ---------- live-preview highlighting ---------- */
+
+const noteHighlight = HighlightStyle.define([
+  { tag: tags.heading1, class: "nh1" },
+  { tag: tags.heading2, class: "nh2" },
+  { tag: tags.heading3, class: "nh3" },
+  { tag: tags.strong, class: "nstrong" },
+  { tag: tags.emphasis, class: "nem" },
+  { tag: tags.quote, class: "nquote" },
+  { tag: tags.processingInstruction, class: "nmark" },
+  { tag: tags.contentSeparator, class: "nrule" },
+  { tag: tags.monospace, class: "ncode" },
+]);
+
+/* ---------- clickable task checkboxes ---------- */
+
+class TaskBox extends WidgetType {
+  constructor(readonly checked: boolean) {
+    super();
+  }
+  eq(other: TaskBox) {
+    return other.checked === this.checked;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-taskbox" + (this.checked ? " done" : "");
+    return el;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+const TASK_RE = /^(\s*)- \[( |x)\] /;
+
+function buildTaskDecorations(state: EditorState): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  for (let lineNo = 1; lineNo <= state.doc.lines; lineNo += 1) {
+    const line = state.doc.line(lineNo);
+    const m = line.text.match(TASK_RE);
+    if (!m) continue;
+    const checked = m[2] === "x";
+    const boxFrom = line.from + m[1].length;
+    const boxTo = boxFrom + 6; // "- [x] "
+    if (checked) {
+      builder.add(line.from, line.from, Decoration.line({ class: "cm-task-done" }));
+    }
+    builder.add(boxFrom, boxTo, Decoration.replace({ widget: new TaskBox(checked) }));
+  }
+  return builder.finish();
+}
+
+const taskField = StateField.define<DecorationSet>({
+  create: buildTaskDecorations,
+  update(deco, tr) {
+    return tr.docChanged || tr.selection ? buildTaskDecorations(tr.state) : deco;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/* ---------- live preview: hide markup away from the cursor ---------- */
+
+class BulletDot extends WidgetType {
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-bullet";
+    el.textContent = "•";
+    return el;
+  }
+  eq() {
+    return true;
+  }
+}
+
+function buildMarkHiding(state: EditorState): DecorationSet {
+  const cursorLine = state.doc.lineAt(state.selection.main.head).number;
+  const ranges: { from: number; to: number; deco: Decoration }[] = [];
+
+  syntaxTree(state).iterate({
+    enter: (node) => {
+      const name = node.name;
+      if (
+        name !== "ListMark" &&
+        name !== "HeaderMark" &&
+        name !== "EmphasisMark" &&
+        name !== "QuoteMark"
+      )
+        return;
+      const line = state.doc.lineAt(node.from);
+      if (TASK_RE.test(line.text)) return; // task rows are handled by the checkbox field
+      const onCursorLine = line.number === cursorLine;
+
+      if (name === "ListMark") {
+        const mark = state.doc.sliceString(node.from, node.to);
+        if (/^\d+[.)]$/.test(mark)) {
+          ranges.push({
+            from: node.from,
+            to: node.to,
+            deco: Decoration.mark({ class: "cm-olmark" }),
+          });
+        } else if (!onCursorLine) {
+          ranges.push({
+            from: node.from,
+            to: node.to,
+            deco: Decoration.replace({ widget: new BulletDot() }),
+          });
+        }
+        return;
+      }
+
+      if (name === "QuoteMark") {
+        ranges.push({
+          from: line.from,
+          to: line.from,
+          deco: Decoration.line({ class: "cm-quoteline" }),
+        });
+        if (!onCursorLine) {
+          let to = node.to;
+          if (state.doc.sliceString(to, to + 1) === " ") to += 1;
+          ranges.push({ from: node.from, to, deco: Decoration.replace({}) });
+        }
+        return;
+      }
+
+      if (onCursorLine) return;
+
+      if (name === "HeaderMark") {
+        let to = node.to;
+        if (state.doc.sliceString(to, to + 1) === " ") to += 1;
+        ranges.push({ from: node.from, to, deco: Decoration.replace({}) });
+      } else if (name === "EmphasisMark") {
+        ranges.push({ from: node.from, to: node.to, deco: Decoration.replace({}) });
+      }
+    },
+  });
+
+  ranges.sort((a, b) => a.from - b.from || a.to - b.to);
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const r of ranges) builder.add(r.from, r.to, r.deco);
+  return builder.finish();
+}
+
+const markHideField = StateField.define<DecorationSet>({
+  create: buildMarkHiding,
+  update(deco, tr) {
+    return tr.docChanged || tr.selection ? buildMarkHiding(tr.state) : deco;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+const taskClick = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    const target = event.target as HTMLElement;
+    if (!target.classList.contains("cm-taskbox")) return false;
+    const pos = view.posAtDOM(target);
+    const line = view.state.doc.lineAt(pos);
+    const m = line.text.match(TASK_RE);
+    if (!m) return false;
+    const markPos = line.from + m[1].length + 3;
+    const checked = m[2] === "x";
+    view.dispatch({
+      changes: { from: markPos, to: markPos + 1, insert: checked ? " " : "x" },
+    });
+    event.preventDefault();
+    return true;
+  },
+});
+
+/* ---------- slash commands ---------- */
+
+function slashSource(getChannel: () => string) {
+  return (context: CompletionContext) => {
+    const match = context.matchBefore(/\/\w*$/);
+    if (!match) return null;
+    const before = context.state.doc.sliceString(
+      Math.max(0, match.from - 1),
+      match.from,
+    );
+    if (before !== "" && before !== "\n" && before !== " ") return null;
+
+    const stamp = () => {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `> ${pad(now.getHours())}:${pad(now.getMinutes())} · ${getChannel()}\n\n`;
+    };
+    const insert = (text: string): Completion["apply"] =>
+      (view, _completion, from, to) => {
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        });
+      };
+
+    const options: Completion[] = [
+      { label: "/todo", detail: "to-do", apply: insert("- [ ] ") },
+      { label: "/list", detail: "bullet list", apply: insert("- ") },
+      { label: "/numbered", detail: "numbered list", apply: insert("1. ") },
+      { label: "/h2", detail: "heading", apply: insert("## ") },
+      { label: "/h3", detail: "small heading", apply: insert("### ") },
+      { label: "/quote", detail: "quote", apply: insert("> ") },
+      { label: "/divider", detail: "divider", apply: insert("---\n") },
+      {
+        label: "/now",
+        detail: "time · channel",
+        apply: (view, _completion, from, to) => {
+          const text = stamp();
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + text.length },
+          });
+        },
+      },
+    ];
+    return { from: match.from, options, validFor: /^\/\w*$/ };
+  };
+}
+
+/* ---------- toolbar line-prefix cycles ---------- */
+
+const PREFIX_RE = /^(\s*)(- \[[ x]\] |- |\d+\. |#{1,3} )?/;
+
+/**
+ * list: none → "- " → "1. " → none （點三下循環，最後一下取消）
+ * heading: none → "## " → "### " → none
+ * todo: on/off
+ */
+function toggleLines(view: EditorView, kind: "list" | "todo" | "heading") {
+  const { state } = view;
+  const fromLine = state.doc.lineAt(state.selection.main.from).number;
+  const toLine = state.doc.lineAt(state.selection.main.to).number;
+  const firstPrefix =
+    state.doc.line(fromLine).text.match(PREFIX_RE)?.[2] ?? "";
+
+  let mode: "bullet" | "ordered" | "todo" | "h2" | "h3" | "none";
+  if (kind === "list") {
+    if (firstPrefix === "- ") mode = "ordered";
+    else if (/^\d+\. $/.test(firstPrefix)) mode = "none";
+    else mode = "bullet";
+  } else if (kind === "heading") {
+    if (firstPrefix === "## ") mode = "h3";
+    else if (firstPrefix === "### ") mode = "none";
+    else mode = "h2";
+  } else {
+    const isTodo = firstPrefix === "- [ ] " || firstPrefix === "- [x] ";
+    mode = isTodo ? "none" : "todo";
+  }
+
+  const changes: { from: number; to: number; insert: string }[] = [];
+  let index = 1;
+  for (let n = fromLine; n <= toLine; n += 1) {
+    const line = state.doc.line(n);
+    const m = line.text.match(PREFIX_RE)!;
+    const indent = m[1];
+    const target =
+      mode === "none"
+        ? ""
+        : mode === "bullet"
+          ? "- "
+          : mode === "ordered"
+            ? `${index}. `
+            : mode === "todo"
+              ? "- [ ] "
+              : mode === "h2"
+                ? "## "
+                : "### ";
+    index += 1;
+    changes.push({
+      from: line.from,
+      to: line.from + m[0].length,
+      insert: indent + target,
+    });
+  }
+  view.dispatch({ changes });
+  view.focus();
+}
+
+/* ---------- react wrapper ---------- */
+
+export function MarkdownEditor({
+  value,
+  channelName,
+  placeholder,
+  onChange,
+  onBlur,
+  onReady,
+}: {
+  value: string;
+  channelName: string;
+  placeholder: string;
+  onChange: (next: string) => void;
+  onBlur: () => void;
+  onReady: (api: EditorApi) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const channelRef = useRef(channelName);
+  const callbacksRef = useRef({ onChange, onBlur, onReady });
+
+  useEffect(() => {
+    channelRef.current = channelName;
+    callbacksRef.current = { onChange, onBlur, onReady };
+  }, [channelName, onChange, onBlur, onReady]);
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+
+    const view = new EditorView({
+      parent: hostRef.current,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          history(),
+          drawSelection(),
+          EditorView.lineWrapping,
+          markdown({ base: markdownLanguage, addKeymap: false }),
+          syntaxHighlighting(noteHighlight),
+          taskField,
+          markHideField,
+          taskClick,
+          autocompletion({
+            override: [slashSource(() => channelRef.current)],
+            icons: false,
+            defaultKeymap: true,
+          }),
+          cmPlaceholder(placeholder),
+          keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              callbacksRef.current.onChange(update.state.doc.toString());
+            }
+            if (update.focusChanged && !update.view.hasFocus) {
+              callbacksRef.current.onBlur();
+            }
+          }),
+        ],
+      }),
+    });
+    viewRef.current = view;
+
+    callbacksRef.current.onReady({
+      toggle: (kind) => toggleLines(view, kind),
+      focus: () => view.focus(),
+      cursorToEnd: () => {
+        view.dispatch({ selection: { anchor: view.state.doc.length } });
+        view.focus();
+      },
+    });
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* External value changes (opening another note) replace the doc. */
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current !== value) {
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: value },
+        selection: { anchor: value.length },
+      });
+    }
+  }, [value]);
+
+  return <div className="note-cm" ref={hostRef} />;
+}
