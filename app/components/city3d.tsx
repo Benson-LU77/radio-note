@@ -137,7 +137,7 @@ void main() {
   // sea fog: the far blocks half-dissolve into a pale band
   float band = smoothstep(0.38, 0.6, vUv.y) * (1.0 - smoothstep(0.62, 0.88, vUv.y));
   lum = mix(lum, max(lum, 0.17), uFog * band);
-  float d = bayer(gl_FragCoord.xy) * (1.0 / float(STEPS));
+  float d = bayer(floor(vUv * uRes)) * (1.0 / float(STEPS));
   float t = clamp(pow(lum, 0.6) + d, 0.0, 0.999);
   int idx = int(t * float(STEPS));
   vec3 outc = uPal[0];
@@ -180,7 +180,7 @@ uniform float uSkin;
 void main() {
   vec3 n = abs(vNormal);
   // unlit three-tone faces: top brightest, x-side dark, z-front mid
-  float tone = (n.y > 0.5 ? 0.92 : (n.x > n.z ? 0.38 : 0.58)) * uSkin;
+  float tone = (n.y > 0.5 ? 0.68 : (n.x > n.z ? 0.38 : 0.58)) * uSkin;
   float amber = step(1.9, vTint.r);
   vec3 base = amber > 0.5 ? vec3(0.55, 0.38, 0.16) : vTint * tone;
 
@@ -217,6 +217,8 @@ type Handles = {
   quantCam: THREE.OrthographicCamera;
   quantMat: THREE.ShaderMaterial;
   mesh: THREE.InstancedMesh | null;
+  buildingMat: THREE.ShaderMaterial | null;
+  creatureMat: THREE.ShaderMaterial | null;
   lotOfInstance: Lot[];
   boxesPerInstance: { lot: Lot; box: { x: number; y: number; z: number; w: number; h: number; d: number } }[];
   creatureMesh: THREE.InstancedMesh | null;
@@ -269,7 +271,14 @@ function partsFor(kind: Creature["kind"], weather: CityWeather): number {
   return BASE_PARTS[kind] + extra;
 }
 
-export type CityDecor = { lamps: boolean; trees: boolean; fountain: boolean };
+export type CityDecor = {
+  lamps: boolean;
+  trees: boolean;
+  fountain: boolean;
+  harbor: boolean;
+  viaduct: boolean;
+  observatory: boolean;
+};
 export type CityWeather = "none" | "rain" | "snow" | "fog";
 
 export function City3D({
@@ -281,6 +290,7 @@ export function City3D({
   decor,
   skin,
   weather,
+  writeMode,
   goMonth,
   ceremony,
   levelCap,
@@ -297,6 +307,8 @@ export function City3D({
   decor: CityDecor;
   skin: "base" | "chalk" | "ink";
   weather: CityWeather;
+  /** writing mode: frame a close-up of the focus lot, not the whole city */
+  writeMode: boolean;
   goMonth: { x: number; z: number; n: number } | null;
   /** a new structure just settled — beam of amber light + camera glide */
   ceremony: { file: string; n: number } | null;
@@ -327,20 +339,24 @@ export function City3D({
   const growRef = useRef(new Map<string, number>());
   const knownFilesRef = useRef<Set<string> | null>(null);
   const growLastRef = useRef(0);
+  const buildingsDirtyRef = useRef(true);
   const weatherSeedsRef = useRef<Float32Array | null>(null);
   const ceremonyRef = useRef<{ x: number; z: number; start: number } | null>(null);
+  const waveRef = useRef<{ x: number; z: number; start: number; oldCap: number } | null>(null);
+  const prevCapRef = useRef<number | null>(null);
   const hoverRef = useRef<string | null>(null);
-  const stateRef = useRef({ plan, focus, matches, weather, levelCap });
+  const stateRef = useRef({ plan, focus, matches, weather, levelCap, writeMode });
 
   useEffect(() => {
-    stateRef.current = { plan, focus, matches, weather, levelCap };
-  }, [plan, focus, matches, weather, levelCap]);
+    stateRef.current = { plan, focus, matches, weather, levelCap, writeMode };
+  }, [plan, focus, matches, weather, levelCap, writeMode]);
 
   /* ---------- frame ---------- */
 
   const applyInstances = useCallback((now: number) => {
     const h = hRef.current;
     if (!h || !h.mesh) return false;
+    if (!buildingsDirtyRef.current) return false; // still city: skip 3000 matrices
     const { focus: fc, matches: mt } = stateRef.current;
     let animating = false;
 
@@ -366,7 +382,19 @@ export function City3D({
 
       // per-building growth: new files rise from the ground, edits grow smoothly
       if (!lot.file.startsWith("__") && lot.floors > 0) {
-        const target = Math.min(lot.floors, stateRef.current.levelCap);
+        let capNow = stateRef.current.levelCap;
+        const wave = waveRef.current;
+        if (wave) {
+          const age = (now - wave.start) / 1000;
+          if (age > 6) {
+            waveRef.current = null;
+          } else {
+            const dist = Math.hypot(lot.x - wave.x, lot.z - wave.z);
+            if (dist > age * 30) capNow = wave.oldCap; // the wave hasn't reached here yet
+            else animating = true;
+          }
+        }
+        const target = Math.min(lot.floors, capNow);
         let df = growRef.current.get(lot.file);
         if (df === undefined) {
           df = target;
@@ -418,6 +446,7 @@ export function City3D({
     }
     h.mesh.instanceMatrix.needsUpdate = true;
     tintAttr.needsUpdate = true;
+    if (!animating) buildingsDirtyRef.current = false; // settled — rest until poked
     return animating;
   }, []);
 
@@ -678,12 +707,14 @@ export function City3D({
       // camera from yaw/zoom/pan around city centre
       const b = stateRef.current.plan.bounds;
       const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 20);
-      const view = (span * 0.72) / zoomRef.current;
+      const writing = stateRef.current.writeMode;
+      // writing is a close-up of one building, never a city-wide letterbox
+      const view = writing ? 15 : (span * 0.72) / zoomRef.current;
       const aspect = vw / vh;
       h.camera.left = (-view * aspect) / 2;
       h.camera.right = (view * aspect) / 2;
-      h.camera.top = view / 2 + span * 0.1;
-      h.camera.bottom = -view / 2 + span * 0.1;
+      h.camera.top = view / 2 + view * 0.14;
+      h.camera.bottom = -view / 2 + view * 0.14;
       const cx = centerRef.current.x + panRef.current.x;
       const cz = centerRef.current.z + panRef.current.z;
       const dist = span * 2 + 50;
@@ -774,6 +805,15 @@ export function City3D({
       creatures: [],
       weatherMesh: null,
       beam: null,
+      buildingMat: new THREE.ShaderMaterial({
+        uniforms: { uFloorH: { value: FLOOR_H }, uSkin: { value: 1 } },
+        vertexShader: BUILDING_VERT,
+        fragmentShader: BUILDING_FRAG,
+      }),
+      creatureMat: new THREE.ShaderMaterial({
+        vertexShader: CREATURE_VERT,
+        fragmentShader: CREATURE_FRAG,
+      }),
     };
 
     // weather particles — one mesh, repurposed for rain or snow
@@ -823,15 +863,50 @@ export function City3D({
   useEffect(() => {
     const h = hRef.current;
     if (!h) return;
+    buildingsDirtyRef.current = true; // fresh mesh needs its matrices
     if (h.mesh) {
       h.scene.remove(h.mesh);
-      h.mesh.geometry.dispose();
-      (h.mesh.material as THREE.Material).dispose();
+      h.mesh.geometry.dispose(); // material is shared and lives on
     }
     const entries: Handles["boxesPerInstance"] = [];
     for (const lot of plan.lots) {
       for (const box of massing(lot)) entries.push({ lot, box });
     }
+    if (decor.harbor && plan.blocks.length > 0) {
+      // a dock off the west edge of the first block
+      const fb = plan.blocks[0];
+      const hx = fb.x - CELL * 2.2;
+      const hz = fb.z + 3 * CELL;
+      entries.push({ lot: decorLot(hx, hz), box: { x: hx, y: -0.1, z: hz, w: 4.5, h: 0.25, d: 2.2 } });
+      entries.push({ lot: { ...decorLot(hx, hz), seed: 3 }, box: { x: hx - 1.6, y: 0.15, z: hz - 0.6, w: 0.14, h: 1.7, d: 0.14 } });
+      entries.push({ lot: { ...decorLot(hx, hz), seed: 3 }, box: { x: hx - 1.6, y: 1.85, z: hz - 0.6, w: 1.2, h: 0.12, d: 0.12 } });
+      entries.push({ lot: decorLot(hx, hz), box: { x: hx + 1.4, y: 0.15, z: hz + 0.5, w: 0.8, h: 0.5, d: 0.8 } });
+    }
+    if (decor.viaduct && plan.blocks.length > 1) {
+      // a high road linking the first two blocks
+      const a = plan.blocks[0];
+      const bb = plan.blocks[1];
+      const ax = a.x + 7.5 * CELL;
+      const bx2 = bb.x - 0.5 * CELL;
+      const vz = a.z + 3 * CELL;
+      const mid = (ax + bx2) / 2;
+      const len = Math.max(2, bx2 - ax);
+      entries.push({ lot: { ...decorLot(mid, vz), seed: 3 }, box: { x: mid, y: 2.2, z: vz, w: len, h: 0.18, d: 0.9 } });
+      for (let pi2 = 0; pi2 <= 2; pi2 += 1) {
+        const px2 = ax + (len * pi2) / 2;
+        entries.push({ lot: decorLot(px2, vz), box: { x: px2, y: 0, z: vz, w: 0.25, h: 2.2, d: 0.25 } });
+      }
+    }
+    if (decor.observatory && plan.blocks.length > 0) {
+      // a dome on the newest block's far corner, watching the galaxy
+      const nb = plan.blocks[plan.blocks.length - 1];
+      const ox2 = nb.x + 7.6 * CELL;
+      const oz2 = nb.z - 0.6 * CELL;
+      entries.push({ lot: decorLot(ox2, oz2), box: { x: ox2, y: 0, z: oz2, w: 1.3, h: 2.6, d: 1.3 } });
+      entries.push({ lot: { ...decorLot(ox2, oz2), seed: 3 }, box: { x: ox2, y: 2.6, z: oz2, w: 1.0, h: 0.7, d: 1.0 } });
+      entries.push({ lot: { ...decorLot(ox2, oz2), seed: 5 }, box: { x: ox2 + 0.3, y: 3.3, z: oz2, w: 0.18, h: 0.55, d: 0.18 } });
+    }
+
     // streets — a faint grid between the month blocks, always there
     const streetLot: Lot = { file: "__street__", date: "", x: 0, z: 0, half: 0, floors: 0, seed: 6, lit: 0 };
     for (const block of plan.blocks) {
@@ -958,14 +1033,8 @@ export function City3D({
     });
     const geo = new THREE.BoxGeometry(1, 1, 1);
     geo.translate(0, 0.5, 0); // origin at base — lets intro rise by scaling Y
-    const mat = new THREE.ShaderMaterial({
-      uniforms: {
-        uFloorH: { value: FLOOR_H },
-        uSkin: { value: skin === "chalk" ? 1.22 : skin === "ink" ? 0.78 : 1 },
-      },
-      vertexShader: BUILDING_VERT,
-      fragmentShader: BUILDING_FRAG,
-    });
+    const mat = h.buildingMat!;
+    mat.uniforms.uSkin.value = skin === "chalk" ? 1.22 : skin === "ink" ? 0.78 : 1;
     const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, entries.length));
     mesh.count = entries.length;
 
@@ -1001,19 +1070,14 @@ export function City3D({
     // creatures: people circle their blocks, cats take the kerbs, birds the sky
     if (h.creatureMesh) {
       h.scene.remove(h.creatureMesh);
-      h.creatureMesh.geometry.dispose();
-      (h.creatureMesh.material as THREE.Material).dispose();
+      h.creatureMesh.geometry.dispose(); // material is shared and lives on
     }
     const creatures = creaturesFor(plan, plan.lots.length, extras);
     const partCount = creatures.reduce((s, c) => s + partsFor(c.kind, weather), 0);
     if (partCount > 0) {
       const cGeo = new THREE.BoxGeometry(1, 1, 1);
       cGeo.translate(0, 0.5, 0);
-      const cMat = new THREE.ShaderMaterial({
-        vertexShader: CREATURE_VERT,
-        fragmentShader: CREATURE_FRAG,
-      });
-      const cMesh = new THREE.InstancedMesh(cGeo, cMat, partCount);
+      const cMesh = new THREE.InstancedMesh(cGeo, h.creatureMat!, partCount);
       cMesh.count = partCount;
       cMesh.frustumCulled = false;
       const cTints = new Float32Array(partCount * 3);
@@ -1070,8 +1134,9 @@ export function City3D({
 
   /* redraw on prop changes */
   useEffect(() => {
+    buildingsDirtyRef.current = true;
     loop();
-  }, [plan, focus, matches, intro, loop]);
+  }, [plan, focus, matches, intro, levelCap, extras, decor, skin, streak, loop]);
 
   /* month navigation from the dock */
   useEffect(() => {
@@ -1083,12 +1148,29 @@ export function City3D({
     loop();
   }, [goMonth, loop]);
 
+  /* level up: a growth wave rolls out from the newest block */
+  useEffect(() => {
+    if (prevCapRef.current !== null && levelCap > prevCapRef.current && plan.blocks.length > 0) {
+      const nb = plan.blocks[plan.blocks.length - 1];
+      waveRef.current = {
+        x: nb.x + 10.5,
+        z: nb.z + 9,
+        start: performance.now(),
+        oldCap: prevCapRef.current,
+      };
+      buildingsDirtyRef.current = true;
+      loop();
+    }
+    prevCapRef.current = levelCap;
+  }, [levelCap, plan, loop]);
+
   /* a new structure settles: amber beam + camera glide */
   useEffect(() => {
     if (!ceremony) return;
     const lot = plan.lots.find((l) => l.file === ceremony.file);
     if (!lot) return;
     ceremonyRef.current = { x: lot.x, z: lot.z, start: performance.now() };
+    buildingsDirtyRef.current = true;
     panTargetRef.current = {
       x: lot.x - centerRef.current.x,
       z: lot.z - centerRef.current.z,

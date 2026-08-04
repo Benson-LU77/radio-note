@@ -10,6 +10,8 @@ export type ShopItem = {
   line: string;
   cost: number;
   kind: "creature" | "decor" | "skin" | "weather";
+  /** hidden until the skyline reaches this level */
+  minLevel?: number;
 };
 
 export const CATALOG: ShopItem[] = [
@@ -21,6 +23,9 @@ export const CATALOG: ShopItem[] = [
   { id: "fountain", name: "Old fountain", line: "A plaza in your first month.", cost: 200, kind: "decor" },
   { id: "chalk", name: "Chalk district", line: "The city, one shade lighter.", cost: 250, kind: "skin" },
   { id: "ink", name: "Ink district", line: "The city, one shade deeper.", cost: 250, kind: "skin" },
+  { id: "harbor", name: "The harbor", line: "A dock on the island's edge.", cost: 350, kind: "decor", minLevel: 3 },
+  { id: "viaduct", name: "The viaduct", line: "A high road between months.", cost: 650, kind: "decor", minLevel: 6 },
+  { id: "observatory", name: "The observatory", line: "A dome watching the galaxy.", cost: 1000, kind: "decor", minLevel: 10 },
   { id: "rain", name: "Night rain", line: "Thin rain over the rooftops.", cost: 150, kind: "weather" },
   { id: "snow", name: "First snow", line: "Slow flakes, soft streets.", cost: 150, kind: "weather" },
   { id: "fog", name: "Sea fog", line: "The far blocks half-dissolve.", cost: 120, kind: "weather" },

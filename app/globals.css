@@ -1258,3 +1258,14 @@ button:focus-visible, input:focus-visible {
 .dex-item em { font: 400 11.5px/1.5 var(--ui); font-style: normal; color: var(--v5); }
 .dex-item span { font: 400 9px/1 var(--pixel); letter-spacing: .1em; color: var(--v4); }
 .dex-item.found span { color: var(--v6); }
+
+.no-gl {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+}
+.no-gl strong { font: 500 18px/1.4 var(--display); color: var(--v6); }
+.no-gl span { font: 400 10px/1.6 var(--pixel); letter-spacing: .08em; color: var(--v4); }

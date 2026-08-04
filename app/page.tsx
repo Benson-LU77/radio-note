@@ -1,22 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { City } from "./components/city";
 import { City3D } from "./components/city3d";
 import { NotesPanel } from "./components/notes";
 import { Hum } from "./lib/hum";
-import { layout, contentWidth } from "./lib/city/layout";
 import { planCity } from "./lib/city/plan";
 import { demoMetrics, loadCityMetrics, dateOf } from "./lib/city/metrics";
 import type { NoteMetric } from "./lib/city/metrics";
 import { ObsidianClient, loadConfig } from "./lib/obsidian";
 import { cityCache } from "./lib/drafts";
 import { earnedWatts, levelFromWatts, orderBonus, skylineCap, streakOf, workOrders } from "./lib/game/watts";
+import { floorsOf } from "./lib/city/plan";
 import { CATALOG, EMPTY_STATE, loadGameState, saveGameState } from "./lib/game/shop";
 import type { GameState } from "./lib/game/shop";
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
 
 const HUM_KEY = "yeyufm.hum";
 const CHIME_KEY = "yeyufm.chime";
@@ -30,8 +26,6 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [camX, setCamX] = useState(0);
-  const [viewport, setViewport] = useState({ w: 1200, h: 800 });
   const [hover, setHover] = useState<{ file: string; x: number; y: number } | null>(null);
   const [focusFile, setFocusFile] = useState<string | null>(null);
   const [requestOpen, setRequestOpen] = useState<{ file: string; n: number } | null>(null);
@@ -53,9 +47,6 @@ export default function Home() {
 
   const humRef = useRef<Hum | null>(null);
   const clientRef = useRef<ObsidianClient | null>(null);
-  const camRef = useRef(0);
-  const camAnimRef = useRef<number | null>(null);
-  const camInitRef = useRef(false);
   const idleTimerRef = useRef<number | null>(null);
   const writeOpenRef = useRef(false);
   const wordsThrottleRef = useRef(0);
@@ -95,8 +86,6 @@ export default function Home() {
 
   /* ---------- derived city ---------- */
 
-  const buildings = useMemo(() => layout(metrics, nowTs), [metrics, nowTs]);
-  const cw = useMemo(() => contentWidth(buildings), [buildings]);
   const cityPlan = useMemo(() => planCity(metrics, nowTs), [metrics, nowTs]);
 
   /* ---------- watts & the depot ---------- */
@@ -107,10 +96,7 @@ export default function Home() {
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }, [nowTs]);
-  const earned = useMemo(
-    () => earnedWatts(metrics) + orderBonus(metrics, today),
-    [metrics, today],
-  );
+  const earned = useMemo(() => earnedWatts(metrics) + orderBonus(metrics), [metrics]);
   const balance = earned - game.spent;
   const level = useMemo(() => levelFromWatts(earned), [earned]);
   const levelCap = skylineCap(level);
@@ -149,6 +135,7 @@ export default function Home() {
           return prev;
         }
         if (earned - prev.spent < item.cost) return prev;
+        if ((item.minLevel ?? 0) > levelFromWatts(earned)) return prev;
         const next: GameState = {
           spent: prev.spent + item.cost,
           owned: [...prev.owned, id],
@@ -177,34 +164,14 @@ export default function Home() {
       lamps: game.owned.includes("lamps"),
       trees: game.owned.includes("trees"),
       fountain: game.owned.includes("fountain"),
+      harbor: game.owned.includes("harbor"),
+      viaduct: game.owned.includes("viaduct"),
+      observatory: game.owned.includes("observatory"),
     }),
     [game.owned],
   );
 
-  /* density-constant view: building size is fixed by the vertical budget,
-     so a small city feels close and a large one grows wider, not denser */
-  const scale = useMemo(() => {
-    if (buildings.length === 0) return 1;
-    const maxH = buildings.reduce((m, b) => Math.max(m, b.h), 40);
-    const cityH = viewport.h * (writeOpen ? 0.34 : 1);
-    return clamp((cityH * 0.3) / maxH, 0.7, 2.0);
-  }, [buildings, viewport.h, writeOpen]);
-
-  const days = useMemo(() => {
-    const seen = new Map<string, { x: number; count: number }>();
-    for (const b of buildings) {
-      const entry = seen.get(b.date);
-      if (entry) {
-        entry.x = (entry.x * entry.count + b.x + b.w / 2) / (entry.count + 1);
-        entry.count += 1;
-      } else {
-        seen.set(b.date, { x: b.x + b.w / 2, count: 1 });
-      }
-    }
-    return [...seen.entries()]
-      .map(([date, v]) => ({ date, x: v.x }))
-      .sort((a, b) => a.x - b.x);
-  }, [buildings]);
+  /* ---------- search lights up the city ---------- */
 
   useEffect(() => {
     const q = query.trim();
@@ -238,6 +205,8 @@ export default function Home() {
     return new Set([...byName, ...searchHits]);
   }, [searchOpen, query, metrics, searchHits]);
 
+  /* ---------- month travel ---------- */
+
   useEffect(() => {
     const n = cityPlan.blocks.length - 1;
     const id = window.setTimeout(() => setMonthIx(n), 0);
@@ -256,85 +225,6 @@ export default function Home() {
     [cityPlan.blocks],
   );
 
-  const centerDate = useMemo(() => {
-    if (days.length === 0) return "";
-    let best = days[0];
-    for (const d of days) if (Math.abs(d.x - camX) < Math.abs(best.x - camX)) best = d;
-    return best.date;
-  }, [days, camX]);
-
-  /* ---------- camera ---------- */
-
-  const applyCam = useCallback((value: number) => {
-    camRef.current = value;
-    setCamX(value);
-  }, []);
-
-  const camBounds = useCallback(() => {
-    const half = viewport.w / (2 * scale);
-    if (cw <= half * 2) return [cw / 2, cw / 2] as const;
-    return [half * 0.7, cw - half * 0.7] as const;
-  }, [cw, scale, viewport.w]);
-
-  const panCam = useCallback(
-    (dxWorld: number) => {
-      if (camAnimRef.current !== null) {
-        cancelAnimationFrame(camAnimRef.current);
-        camAnimRef.current = null;
-      }
-      const [lo, hi] = camBounds();
-      applyCam(clamp(camRef.current + dxWorld, lo, hi));
-    },
-    [applyCam, camBounds],
-  );
-
-  const glideCam = useCallback(
-    (target: number) => {
-      if (camAnimRef.current !== null) cancelAnimationFrame(camAnimRef.current);
-      const [lo, hi] = camBounds();
-      const goal = clamp(target, lo, hi);
-      const frame = () => {
-        const current = camRef.current;
-        const next = current + (goal - current) * 0.16;
-        if (Math.abs(goal - next) < 0.4) {
-          applyCam(goal);
-          camAnimRef.current = null;
-          return;
-        }
-        applyCam(next);
-        camAnimRef.current = requestAnimationFrame(frame);
-      };
-      camAnimRef.current = requestAnimationFrame(frame);
-    },
-    [applyCam, camBounds],
-  );
-
-  const stepDay = useCallback(
-    (dir: -1 | 1) => {
-      if (days.length === 0) return;
-      let index = 0;
-      let bestDist = Infinity;
-      for (let i = 0; i < days.length; i += 1) {
-        const dist = Math.abs(days[i].x - camRef.current);
-        if (dist < bestDist) {
-          bestDist = dist;
-          index = i;
-        }
-      }
-      const next = clamp(index + dir, 0, days.length - 1);
-      glideCam(days[next].x);
-    },
-    [days, glideCam],
-  );
-
-  /* initial camera: rest on the newest part of the city */
-  useEffect(() => {
-    if (camInitRef.current || buildings.length === 0) return;
-    camInitRef.current = true;
-    const [lo, hi] = camBounds();
-    applyCam(clamp(cw, lo, hi));
-  }, [buildings, camBounds, applyCam, cw]);
-
   /* ---------- intro ---------- */
 
   useEffect(() => {
@@ -344,16 +234,6 @@ export default function Home() {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, []);
-
-  /* ---------- viewport ---------- */
-
-  useEffect(() => {
-    const measure = () =>
-      setViewport({ w: window.innerWidth, h: window.innerHeight });
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
   }, []);
 
   /* ---------- sound prefs ---------- */
@@ -442,7 +322,7 @@ export default function Home() {
     setMetrics((prev) => {
       const index = prev.findIndex((m) => m.file === file);
       if (index >= 0) {
-        if (Math.abs(prev[index].words - words) < 2) return prev;
+        if (floorsOf(prev[index].words) === floorsOf(words)) return prev;
         const next = [...prev];
         next[index] = { ...next[index], words, mtime: now };
         return next;
@@ -501,13 +381,7 @@ export default function Home() {
         target?.tagName === "TEXTAREA" ||
         target?.isContentEditable;
       if (isControl) return;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        stepDay(-1);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        stepDay(1);
-      } else if (event.key === "/") {
+      if (event.key === "/") {
         event.preventDefault();
         setSearchOpen(true);
         window.setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -534,41 +408,11 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeWrite, dexOpen, jumpMonth, openWrite, registerActivity, searchOpen, settingsOpen, shopOpen, stepDay]);
-
-  /* ---------- wheel pans the city ---------- */
-
-  const onWheel = useCallback(
-    (event: React.WheelEvent<HTMLElement>) => {
-      if (writeOpenRef.current) return;
-      if ((event.target as HTMLElement).closest(".notes-panel, .settings-panel, .city-canvas-3d")) return;
-      const delta =
-        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      panCam((clamp(delta, -80, 80) * 0.9) / scale);
-    },
-    [panCam, scale],
-  );
-
-  /* ---------- ruler drag ---------- */
-
-  const rulerDragRef = useRef(false);
-  const rulerToCam = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      const f = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-      const [lo, hi] = camBounds();
-      applyCam(lo + (hi - lo) * f);
-    },
-    [applyCam, camBounds],
-  );
+  }, [closeWrite, dexOpen, jumpMonth, openWrite, registerActivity, searchOpen, settingsOpen, shopOpen]);
 
   /* ---------- render ---------- */
 
-  const empty = buildings.length === 0;
-  const rulerFraction = (() => {
-    const [lo, hi] = camBounds();
-    return hi === lo ? 0.5 : clamp((camX - lo) / (hi - lo), 0, 1);
-  })();
+  const empty = cityPlan.lots.length === 0;
 
   const rootClass = [
     "city-app",
@@ -581,7 +425,7 @@ export default function Home() {
     .join(" ");
 
   return (
-    <main className={rootClass} onWheel={onWheel}>
+    <main className={rootClass}>
       <div className="city-field">
         {gl3d ? (
           <City3D
@@ -593,6 +437,7 @@ export default function Home() {
             decor={decor}
             skin={game.skin}
             weather={game.weather}
+            writeMode={writeOpen}
             goMonth={goMonth}
             ceremony={ceremony}
             levelCap={levelCap}
@@ -602,17 +447,10 @@ export default function Home() {
             onFail={() => setGl3d(false)}
           />
         ) : (
-          <City
-            buildings={buildings}
-            camX={camX}
-            scale={scale}
-            intro={intro}
-            focus={focusFile}
-            matches={matches}
-            onHover={(file, x, y) => setHover(file ? { file, x, y } : null)}
-            onOpen={(file) => openWrite(file)}
-            onPan={panCam}
-          />
+          <div className="no-gl">
+            <strong>This city needs WebGL.</strong>
+            <span>Your notes and the editor still work — press N to write.</span>
+          </div>
         )}
         {hover && !writeOpen && (
           <div
@@ -730,41 +568,6 @@ export default function Home() {
         </div>
       )}
 
-      {!empty && !writeOpen && !gl3d && (
-        <div className="time-dock immersion-ui">
-          <span className="time-date">{centerDate}</span>
-          <div
-            className="time-ruler"
-            onPointerDown={(event) => {
-              rulerDragRef.current = true;
-              try {
-                event.currentTarget.setPointerCapture(event.pointerId);
-              } catch {}
-              rulerToCam(event);
-            }}
-            onPointerMove={(event) => {
-              if (rulerDragRef.current) rulerToCam(event);
-            }}
-            onPointerUp={() => {
-              rulerDragRef.current = false;
-            }}
-            onPointerCancel={() => {
-              rulerDragRef.current = false;
-            }}
-            aria-hidden="true"
-          >
-            <i className="today-needle" style={{ left: `${rulerFraction * 100}%` }} />
-            {days.map((d) => (
-              <span
-                key={d.date}
-                className="day-mark"
-                style={{ left: `${cw > 0 ? (d.x / cw) * 100 : 50}%` }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
       {!writeOpen && (
         <button
           type="button"
@@ -853,12 +656,13 @@ export default function Home() {
           {CATALOG.map((item) => {
             const owned = game.owned.includes(item.id);
             const affordable = balance >= item.cost;
+            const locked = (item.minLevel ?? 0) > level;
             const active =
               (item.kind === "weather" && game.weather === item.id) ||
               (item.kind === "skin" && game.skin === item.id);
             const clickable = owned
               ? item.kind === "weather" || (item.kind === "skin" && !active)
-              : affordable;
+              : affordable && !locked;
             return (
               <button
                 key={item.id}
@@ -870,7 +674,13 @@ export default function Home() {
                 <strong>{item.name}</strong>
                 <em>{item.line}</em>
                 <span>
-                  {active ? "tonight" : owned ? "in the city" : `${item.cost} W`}
+                  {active
+                    ? "tonight"
+                    : owned
+                      ? "in the city"
+                      : locked
+                        ? `level ${item.minLevel}`
+                        : `${item.cost} W`}
                 </span>
               </button>
             );
@@ -916,7 +726,7 @@ export default function Home() {
           </label>
         </div>
         <div className="panel-shortcuts">
-          <span><b>← →</b> walk the days</span>
+          <span><b>← → ↑ ↓</b> pan the city</span>
           <span><b>/</b> search</span>
           <span><b>N</b> write</span>
           <span><b>Esc</b> close</span>

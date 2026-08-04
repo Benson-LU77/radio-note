@@ -65,8 +65,18 @@ assert.strictEqual(streakOf(metrics, "2026-08-03"), 1, "streak breaks on gaps");
 assert.strictEqual(
   streakOf(threeDays, "2026-08-03"), 3, "streak counts consecutive nights");
 
-// 6. work orders derive
+// 6. work orders derive: always three, rotation is deterministic, and
+// the guaranteed "write" order completes on any written night
 const orders = workOrders(metrics, "2026-08-01");
-assert.strictEqual(orders.filter((o) => o.done).length, 3, "all three orders done that night");
+assert.strictEqual(orders.length, 3, "three orders per night");
+assert.ok(orders[0].id === "write" && orders[0].done, "write order done that night");
+assert.deepStrictEqual(orders, workOrders(metrics, "2026-08-01"), "rotation deterministic");
+
+// 7. earned watts are monotone: adding a later note never lowers the total
+const { earnedWatts: ew, orderBonus: ob } = await import(join(out, "watts.js"));
+const before = ew(metrics) + ob(metrics);
+const more = [...metrics, { file: "2026-08-04 Today.md", date: "2026-08-04", words: 200, mtime: NOW }];
+const after = ew(more) + ob(more);
+assert.ok(after >= before, "the city never shrinks overnight");
 
 console.log("city tests: all passed");
