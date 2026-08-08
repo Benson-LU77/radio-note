@@ -80,6 +80,7 @@ export function NotesPanel({
   recent,
   pages,
   onConnected,
+  cityLive,
   onWords,
   onSaved,
   onActiveFile,
@@ -96,6 +97,8 @@ export function NotesPanel({
   pages?: string[];
   /** fired after a successful connect so the city adopts the client too */
   onConnected?: () => void;
+  /** the page-level sync state — when the city reconnects, so do we */
+  cityLive?: boolean;
   /** live word count while typing — feeds the city */
   onWords: (file: string, words: number) => void;
   /** a save landed in the vault; isNew = the structure just settled */
@@ -196,6 +199,13 @@ export function NotesPanel({
     void checkConnection(clientRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  /* the city reconnected — follow it out of the offline state */
+  useEffect(() => {
+    if (!open || !cityLive || connected || !clientRef.current) return;
+    void checkConnection(clientRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cityLive, connected]);
 
   /* Today is one page per day: load it if it exists, otherwise start it. */
   const openTonight = useCallback(async () => {

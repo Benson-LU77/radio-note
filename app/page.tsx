@@ -671,6 +671,7 @@ export default function Home() {
         recent={recent}
         pages={allPages}
         onConnected={onConnected}
+        cityLive={synced === "live"}
         onWords={onWords}
         onSaved={onSaved}
         onActiveFile={setFocusFile}
