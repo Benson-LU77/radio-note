@@ -429,7 +429,8 @@ export function City3D({
       }
       if (lot.file === "__decor__") {
         // seed marks the part: 2 structure, 3 lamp head, 4 foliage, 5 sparkle
-        const v = lot.seed === 3 ? 1.5 : lot.seed === 4 ? 0.98 : lot.seed === 5 ? 1.6 : 0.55;
+        const v =
+          lot.seed === 3 ? 1.5 : lot.seed === 4 ? 0.98 : lot.seed === 5 ? 1.6 : lot.seed === 7 ? 0.82 : 0.55;
         tintAttr.setXYZ(i, v, v, v * 1.03);
         continue;
       }
@@ -527,8 +528,14 @@ export function City3D({
         const y = p.y + bob;
         put(p.x, y + 0.14, p.z, 0.22, 0.22, 0.18); // body
         put(p.x, y + 0.37 + nod, p.z, 0.19, 0.17, 0.19); // head
-        put(p.x, y + 0.52 + nod, p.z, 0.2, 0.05, 0.2); // hair cap
-        const armSwing = swing * 0.06;
+        if (c.kind === "you") {
+          put(p.x, y + 0.52 + nod, p.z, 0.15, 0.13, 0.15); // your little top hat
+        } else if (c.seed % 3 === 0) {
+          put(p.x, y + 0.52 + nod, p.z, 0.16, 0.1, 0.16); // a taller hat
+        } else {
+          put(p.x, y + 0.52 + nod, p.z, 0.2, 0.05, 0.2); // hair cap
+        }
+        const armSwing = -swing * 0.06; // arms counter the legs — a real gait
         put(p.x + lx * 0.145 + fx * armSwing, y + 0.16, p.z + lz * 0.145 + fz * armSwing, 0.06, 0.18, 0.06);
         put(p.x - lx * 0.145 - fx * armSwing, y + 0.16, p.z - lz * 0.145 - fz * armSwing, 0.06, 0.18, 0.06);
         const step = swing * 0.05;
@@ -549,12 +556,22 @@ export function City3D({
         const hurry = chasing ? 1.6 : 1;
         const bob = p.moving ? Math.abs(Math.sin(p.phase * hurry)) * 0.012 : 0;
         const y = p.y + bob;
-        put(p.x, y + 0.03, p.z, alongX ? 0.3 : 0.12, 0.1, alongX ? 0.12 : 0.3);
-        put(p.x + fx * 0.17, y + 0.1, p.z + fz * 0.17, 0.1, 0.09, 0.1);
-        put(p.x + fx * 0.17 + lx * 0.035, y + 0.19, p.z + fz * 0.17 + lz * 0.035, 0.028, 0.05, 0.028);
-        put(p.x + fx * 0.17 - lx * 0.035, y + 0.19, p.z + fz * 0.17 - lz * 0.035, 0.028, 0.05, 0.028);
-        const sway = Math.sin(p.phase * 1.4) * 0.03;
-        put(p.x - fx * 0.18 + lx * sway, y + 0.1, p.z - fz * 0.18 + lz * sway, 0.035, 0.12, 0.035);
+        if (!p.moving) {
+          // sitting: upright body, head high, tail curled at the side
+          put(p.x, y, p.z, 0.13, 0.17, 0.13); // body upright
+          put(p.x + fx * 0.02, y + 0.17, p.z + fz * 0.02, 0.1, 0.09, 0.1); // head
+          put(p.x + fx * 0.02 + lx * 0.035, y + 0.26, p.z + fz * 0.02 + lz * 0.035, 0.028, 0.05, 0.028);
+          put(p.x + fx * 0.02 - lx * 0.035, y + 0.26, p.z + fz * 0.02 - lz * 0.035, 0.028, 0.05, 0.028);
+          const curl = Math.sin(t * 0.9 + c.seed) * 0.02;
+          put(p.x - lx * 0.09 + curl, y + 0.01, p.z - lz * 0.09, 0.1, 0.035, 0.1); // curled tail
+        } else {
+          put(p.x, y + 0.03, p.z, alongX ? 0.3 : 0.12, 0.1, alongX ? 0.12 : 0.3);
+          put(p.x + fx * 0.17, y + 0.1, p.z + fz * 0.17, 0.1, 0.09, 0.1);
+          put(p.x + fx * 0.17 + lx * 0.035, y + 0.19, p.z + fz * 0.17 + lz * 0.035, 0.028, 0.05, 0.028);
+          put(p.x + fx * 0.17 - lx * 0.035, y + 0.19, p.z + fz * 0.17 - lz * 0.035, 0.028, 0.05, 0.028);
+          const sway = Math.sin(p.phase * 1.4) * 0.03;
+          put(p.x - fx * 0.18 + lx * sway, y + 0.1, p.z - fz * 0.18 + lz * sway, 0.035, 0.12, 0.035);
+        }
       } else if (c.kind === "dog") {
         const bob = p.moving ? Math.abs(Math.sin(p.phase)) * 0.018 : 0;
         const y = p.y + bob;
@@ -567,7 +584,8 @@ export function City3D({
         put(p.x - fx * 0.22 + lx * wag, y + 0.16, p.z - fz * 0.22 + lz * wag, 0.04, 0.11, 0.04);
       } else {
         const glideY = p.y + Math.sin(p.phase * 0.5) * 0.3;
-        const flap = Math.sin(p.phase) * 0.5;
+        const gliding = Math.sin(p.phase * 0.13 + c.seed) > 0.25;
+        const flap = gliding ? 0.06 : Math.sin(p.phase) * 0.5;
         put(p.x, glideY, p.z, 0.1, 0.06, 0.14);
         put(p.x + lx * 0.1, glideY + 0.03 + flap * 0.05, p.z + lz * 0.1, 0.12, 0.03, 0.09);
         put(p.x - lx * 0.1, glideY + 0.03 + flap * 0.05, p.z - lz * 0.1, 0.12, 0.03, 0.09);
@@ -969,6 +987,7 @@ export function City3D({
         for (const [lx, lz] of corners) {
           entries.push({ lot: decorLot(lx, lz), box: { x: lx, y: 0, z: lz, w: 0.09, h: 1.5, d: 0.09 } });
           entries.push({ lot: { ...decorLot(lx, lz), seed: 3 }, box: { x: lx, y: 1.5, z: lz, w: 0.22, h: 0.18, d: 0.22 } });
+          entries.push({ lot: { ...decorLot(lx, lz), seed: 7 }, box: { x: lx, y: -0.015, z: lz, w: 0.85, h: 0.02, d: 0.85 } }); // light pool
         }
       }
     }
@@ -979,7 +998,9 @@ export function City3D({
           const tx = block.x + rand() * 7 * CELL;
           const tz = block.z + 6 * CELL + CELL * 0.42;
           entries.push({ lot: decorLot(tx, tz), box: { x: tx, y: 0, z: tz, w: 0.1, h: 0.4, d: 0.1 } });
-          entries.push({ lot: { ...decorLot(tx, tz), seed: 4 }, box: { x: tx, y: 0.4, z: tz, w: 0.5 + rand() * 0.2, h: 0.5, d: 0.5 + rand() * 0.2 } });
+          const cw2 = 0.5 + rand() * 0.2;
+          entries.push({ lot: { ...decorLot(tx, tz), seed: 4 }, box: { x: tx, y: 0.4, z: tz, w: cw2, h: 0.42, d: cw2 } });
+          entries.push({ lot: { ...decorLot(tx, tz), seed: 4 }, box: { x: tx, y: 0.82, z: tz, w: cw2 * 0.6, h: 0.3, d: cw2 * 0.6 } }); // crown
         }
       }
     }
@@ -988,6 +1009,7 @@ export function City3D({
       const fx = first.x + 3.5 * CELL;
       const fz = first.z - CELL * 0.5;
       entries.push({ lot: decorLot(fx, fz), box: { x: fx, y: 0, z: fz, w: 1.4, h: 0.18, d: 1.4 } });
+      entries.push({ lot: { ...decorLot(fx, fz), seed: 4 }, box: { x: fx, y: 0.18, z: fz, w: 0.95, h: 0.08, d: 0.95 } }); // inner ring
       entries.push({ lot: decorLot(fx, fz), box: { x: fx, y: 0.18, z: fz, w: 0.24, h: 0.55, d: 0.24 } });
       entries.push({ lot: { ...decorLot(fx, fz), seed: 5 }, box: { x: fx, y: 0.73, z: fz, w: 0.16, h: 0.16, d: 0.16 } });
     }

@@ -78,6 +78,7 @@ export function NotesPanel({
   requestOpen,
   requestSetup,
   recent,
+  pages,
   onConnected,
   onWords,
   onSaved,
@@ -91,6 +92,8 @@ export function NotesPanel({
   requestSetup?: number;
   /** recently touched pages, newest first */
   recent?: string[];
+  /** every vault page, for [[wikilink]] autocomplete */
+  pages?: string[];
   /** fired after a successful connect so the city adopts the client too */
   onConnected?: () => void;
   /** live word count while typing — feeds the city */
@@ -711,6 +714,7 @@ export function NotesPanel({
           <MarkdownEditor
             value={content}
             channelName=""
+            pages={pages}
             placeholder="Write something small."
             onChange={handleChange}
             onBlur={() => void flushSave()}

@@ -207,7 +207,8 @@ function slashSource(getChannel: () => string) {
     const stamp = () => {
       const now = new Date();
       const pad = (n: number) => String(n).padStart(2, "0");
-      return `> ${pad(now.getHours())}:${pad(now.getMinutes())} · ${getChannel()}\n\n`;
+      const ch = getChannel();
+      return `> ${pad(now.getHours())}:${pad(now.getMinutes())}${ch ? ` · ${ch}` : ""}\n\n`;
     };
     const insert = (text: string): Completion["apply"] =>
       (view, _completion, from, to) => {
@@ -225,6 +226,13 @@ function slashSource(getChannel: () => string) {
       { label: "/h3", detail: "small heading", apply: insert("### ") },
       { label: "/quote", detail: "quote", apply: insert("> ") },
       { label: "/divider", detail: "divider", apply: insert("---\n") },
+      { label: "/dream", detail: "dream log", apply: insert("## Dream log\n\n- ") },
+      {
+        label: "/3things",
+        detail: "three good things",
+        apply: insert("## Three good things\n\n1. \n2. \n3. "),
+      },
+      { label: "/tomorrow", detail: "for tomorrow", apply: insert("## Tomorrow\n\n- [ ] ") },
       {
         label: "/now",
         detail: "time · channel",
@@ -240,6 +248,61 @@ function slashSource(getChannel: () => string) {
     return { from: match.from, options, validFor: /^\/\w*$/ };
   };
 }
+
+/* ---------- [[wikilink]] autocomplete ---------- */
+
+function wikiSource(getPages: () => string[]) {
+  return (context: CompletionContext) => {
+    const match = context.matchBefore(/\[\[[^\]]*$/);
+    if (!match) return null;
+    const options: Completion[] = getPages().map((file) => {
+      const name = file.replace(/\.md$/, "");
+      return {
+        label: name,
+        apply: (view: EditorView, _c: Completion, from: number, to: number) => {
+          const text = `${name}]]`;
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + text.length },
+          });
+        },
+      };
+    });
+    return { from: match.from + 2, options, validFor: /^[^\]]*$/ };
+  };
+}
+
+/* ---------- inline formatting (Cmd+B / Cmd+I) ---------- */
+
+function wrapInline(view: EditorView, marker: string): boolean {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.doc.sliceString(from, to);
+  const n = marker.length;
+  const before = view.state.doc.sliceString(Math.max(0, from - n), from);
+  const after = view.state.doc.sliceString(to, to + n);
+  if (before === marker && after === marker) {
+    view.dispatch({
+      changes: [
+        { from: from - n, to: from, insert: "" },
+        { from: to, to: to + n, insert: "" },
+      ],
+      selection: { anchor: from - n, head: to - n },
+    });
+    return true;
+  }
+  view.dispatch({
+    changes: { from, to, insert: `${marker}${selected}${marker}` },
+    selection: selected
+      ? { anchor: from + n, head: to + n }
+      : { anchor: from + n },
+  });
+  return true;
+}
+
+const inlineKeys = keymap.of([
+  { key: "Mod-b", run: (view) => wrapInline(view, "**") },
+  { key: "Mod-i", run: (view) => wrapInline(view, "*") },
+]);
 
 /* ---------- toolbar line-prefix cycles ---------- */
 
@@ -306,6 +369,7 @@ export function MarkdownEditor({
   value,
   channelName,
   placeholder,
+  pages = [],
   onChange,
   onBlur,
   onReady,
@@ -313,6 +377,8 @@ export function MarkdownEditor({
   value: string;
   channelName: string;
   placeholder: string;
+  /** vault page names for [[wikilink]] autocomplete */
+  pages?: string[];
   onChange: (next: string) => void;
   onBlur: () => void;
   onReady: (api: EditorApi) => void;
@@ -320,12 +386,14 @@ export function MarkdownEditor({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const channelRef = useRef(channelName);
+  const pagesRef = useRef(pages);
   const callbacksRef = useRef({ onChange, onBlur, onReady });
 
   useEffect(() => {
     channelRef.current = channelName;
+    pagesRef.current = pages;
     callbacksRef.current = { onChange, onBlur, onReady };
-  }, [channelName, onChange, onBlur, onReady]);
+  }, [channelName, pages, onChange, onBlur, onReady]);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -344,11 +412,15 @@ export function MarkdownEditor({
           markHideField,
           taskClick,
           autocompletion({
-            override: [slashSource(() => channelRef.current)],
+            override: [
+              slashSource(() => channelRef.current),
+              wikiSource(() => pagesRef.current),
+            ],
             icons: false,
             defaultKeymap: true,
           }),
           cmPlaceholder(placeholder),
+          inlineKeys,
           keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {

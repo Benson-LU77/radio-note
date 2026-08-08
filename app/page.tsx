@@ -143,6 +143,7 @@ export default function Home() {
   const levelCap = skylineCap(level);
   const streak = useMemo(() => streakOf(metrics, today), [metrics, today]);
   const orders = useMemo(() => workOrders(metrics, today), [metrics, today]);
+  const allPages = useMemo(() => metrics.map((m) => m.file), [metrics]);
   const recent = useMemo(
     () => [...metrics].sort((a, b) => b.mtime - a.mtime).slice(0, 6).map((m) => m.file),
     [metrics],
@@ -668,6 +669,7 @@ export default function Home() {
         requestOpen={requestOpen}
         requestSetup={requestSetup}
         recent={recent}
+        pages={allPages}
         onConnected={onConnected}
         onWords={onWords}
         onSaved={onSaved}
