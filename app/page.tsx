@@ -57,6 +57,47 @@ export default function Home() {
     return humRef.current;
   }, []);
 
+  const lastSyncRef = useRef(0);
+
+  /** re-pull metrics from Obsidian; safe to call any time */
+  const resync = useCallback(() => {
+    if (new URLSearchParams(window.location.search).get("demo")) return;
+    const config = loadConfig();
+    if (config && !clientRef.current) clientRef.current = new ObsidianClient(config);
+    lastSyncRef.current = Date.now();
+    void loadCityMetrics(clientRef.current, (fresh) => {
+      setMetrics(fresh);
+      setSynced("live");
+    }).then((quick) => {
+      setMetrics((prev) => (prev.length > 0 ? prev : quick));
+      setSynced((prev) => (prev === "live" ? prev : clientRef.current ? "cached" : "local"));
+    });
+  }, []);
+
+  /* returning to the app (PWA re-open, tab re-focus) reconnects Obsidian */
+  useEffect(() => {
+    const wake = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastSyncRef.current < 15000) return;
+      resync();
+    };
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [resync]);
+
+  /* the notes panel just connected — adopt the client for the city too */
+  const onConnected = useCallback(() => {
+    const config = loadConfig();
+    if (!config) return;
+    clientRef.current = new ObsidianClient(config);
+    resync();
+    void loadGameState(clientRef.current).then((state) => setGame(state));
+  }, [resync]);
+
   /* ---------- data ---------- */
 
   useEffect(() => {
@@ -102,6 +143,10 @@ export default function Home() {
   const levelCap = skylineCap(level);
   const streak = useMemo(() => streakOf(metrics, today), [metrics, today]);
   const orders = useMemo(() => workOrders(metrics, today), [metrics, today]);
+  const recent = useMemo(
+    () => [...metrics].sort((a, b) => b.mtime - a.mtime).slice(0, 6).map((m) => m.file),
+    [metrics],
+  );
   const dex = useMemo(() => {
     const count = (a: number) => cityPlan.lots.filter((l) => l.arch === a).length;
     return [
@@ -511,8 +556,13 @@ export default function Home() {
           <button
             type="button"
             onClick={() => {
-              setSearchOpen(true);
-              window.setTimeout(() => searchInputRef.current?.focus(), 50);
+              if (searchOpen) {
+                setSearchOpen(false);
+                setQuery("");
+              } else {
+                setSearchOpen(true);
+                window.setTimeout(() => searchInputRef.current?.focus(), 50);
+              }
             }}
             className={searchOpen ? "active" : ""}
             aria-label="Search"
@@ -561,6 +611,25 @@ export default function Home() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onBlur={() => {
+              // clicking back into the city puts the light away
+              window.setTimeout(() => {
+                setSearchOpen(false);
+                setQuery("");
+              }, 120);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && matches && matches.size > 0) {
+                const best = metrics
+                  .filter((m) => matches.has(m.file))
+                  .sort((a, b) => b.mtime - a.mtime)[0];
+                if (best) {
+                  openWrite(best.file);
+                  setSearchOpen(false);
+                  setQuery("");
+                }
+              }
+            }}
             placeholder="light up the city…"
             spellCheck={false}
             aria-label="Search notes"
@@ -598,6 +667,8 @@ export default function Home() {
         onClose={closeWrite}
         requestOpen={requestOpen}
         requestSetup={requestSetup}
+        recent={recent}
+        onConnected={onConnected}
         onWords={onWords}
         onSaved={onSaved}
         onActiveFile={setFocusFile}

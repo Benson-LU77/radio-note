@@ -77,6 +77,8 @@ export function NotesPanel({
   onClose,
   requestOpen,
   requestSetup,
+  recent,
+  onConnected,
   onWords,
   onSaved,
   onActiveFile,
@@ -87,6 +89,10 @@ export function NotesPanel({
   requestOpen: { file: string; n: number } | null;
   /** ask the panel to show the Obsidian setup view */
   requestSetup?: number;
+  /** recently touched pages, newest first */
+  recent?: string[];
+  /** fired after a successful connect so the city adopts the client too */
+  onConnected?: () => void;
   /** live word count while typing — feeds the city */
   onWords: (file: string, words: number) => void;
   /** a save landed in the vault; isNew = the structure just settled */
@@ -179,6 +185,14 @@ export function NotesPanel({
       return false;
     }
   }, []);
+
+  /* every open re-checks the connection — a PWA quit/relaunch or an
+     Obsidian restart otherwise leaves us silently "connected" */
+  useEffect(() => {
+    if (!open || !clientRef.current || view === "setup") return;
+    void checkConnection(clientRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   /* Today is one page per day: load it if it exists, otherwise start it. */
   const openTonight = useCallback(async () => {
@@ -329,13 +343,14 @@ export function NotesPanel({
     const client = makeClient(config);
     void checkConnection(client).then((ok) => {
       if (!ok) return;
+      onConnected?.();
       if (dirtyRef.current && content.trim() !== seedRef.current.trim()) {
         setView("edit");
       } else {
         void openTonight();
       }
     });
-  }, [url, key, folder, content, makeClient, checkConnection, openTonight]);
+  }, [url, key, folder, content, makeClient, checkConnection, onConnected, openTonight]);
 
   const flushSave = useCallback(async () => {
     const client = clientRef.current;
@@ -498,6 +513,20 @@ export function NotesPanel({
     [activeFile, onWords],
   );
 
+  const newPage = useCallback(() => {
+    const seed = `> ${timeStamp()}\n\n`;
+    seedRef.current = seed;
+    setActiveFile(null); // claims its name on the first keystroke
+    setConflict(null);
+    setContent(seed);
+    baseMtimeRef.current = null;
+    baseContentRef.current = null;
+    dirtyRef.current = false;
+    setStatus("idle");
+    setView("edit");
+    window.setTimeout(() => editorRef.current?.cursorToEnd(), 150);
+  }, []);
+
   const handleClose = useCallback(() => {
     void flushSave();
     onClose();
@@ -519,6 +548,11 @@ export function NotesPanel({
       <div className="panel-heading">
         <span>{view === "setup" ? "Vault" : ""}</span>
         <div className="notes-heading-actions">
+          {view !== "setup" && (
+            <button type="button" className="notes-gear" onClick={newPage} aria-label="New page" title="New page">
+              +
+            </button>
+          )}
           {view !== "setup" && (
             <button
               type="button"
@@ -596,10 +630,27 @@ export function NotesPanel({
 
       {view === "edit" && (
         <div className={"notes-editor size-" + fontSize}>
+          {recent && recent.length > 1 && (
+            <div className="notes-recent" aria-label="Recent pages">
+              {recent.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={f === activeFile ? "current" : ""}
+                  onClick={() => void openNote(f)}
+                >
+                  {prettyName(f)}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="notes-editor-bar">
             <strong>{activeFile ? prettyName(activeFile) : "Today"}</strong>
             <span className="bar-side">
-              <em>{statusLabel}</em>
+              <em>
+                {countWords(content) > 0 ? `${countWords(content)}w · ` : ""}
+                {statusLabel}
+              </em>
               {connected && activeFile && (
                 <button
                   type="button"

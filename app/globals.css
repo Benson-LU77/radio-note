@@ -1269,3 +1269,26 @@ button:focus-visible, input:focus-visible {
 }
 .no-gl strong { font: 500 18px/1.4 var(--display); color: var(--v6); }
 .no-gl span { font: 400 10px/1.6 var(--pixel); letter-spacing: .08em; color: var(--v4); }
+
+.notes-recent {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.notes-recent::-webkit-scrollbar { display: none; }
+.notes-recent button {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--v5);
+  font: 400 10px/1 var(--mono);
+  letter-spacing: .03em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .25s ease, border-color .25s ease;
+}
+.notes-recent button:hover { color: var(--v6); border-color: var(--v4); }
+.notes-recent button.current { color: var(--v7); border-color: var(--v4); }
